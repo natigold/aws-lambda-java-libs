@@ -13,33 +13,33 @@ public class InvocationRequest {
     /**
      * The Lambda request ID associated with the request.
      */
-    private String id;
+    String id;
 
     /**
      * The X-Ray tracing ID.
      */
-    private String xrayTraceId;
+    String xrayTraceId;
 
     /**
      * The ARN of the Lambda function being invoked.
      */
-    private String invokedFunctionArn;
+    String invokedFunctionArn;
 
     /**
      * Function execution deadline counted in milliseconds since the Unix epoch.
      */
-    private long deadlineTimeInMs;
+    long deadlineTimeInMs;
 
     /**
      * The client context header. This field is populated when the function is invoked from a mobile client.
      */
-    private String clientContext;
+    String clientContext;
 
     /**
      * The Cognito Identity context for the invocation. This field is populated when the function is invoked with AWS
      * credentials obtained from Cognito Identity.
      */
-    private String cognitoIdentity;
+    String cognitoIdentity;
 
     private byte[] content;
 

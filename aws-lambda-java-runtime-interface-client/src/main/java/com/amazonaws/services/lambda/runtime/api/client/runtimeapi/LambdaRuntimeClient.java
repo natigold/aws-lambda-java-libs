@@ -1,11 +1,22 @@
 package com.amazonaws.services.lambda.runtime.api.client.runtimeapi;
 
+import software.amazon.awssdk.http.SdkHttpMethod;
+import software.amazon.awssdk.http.SdkHttpRequest;
+import software.amazon.awssdk.http.async.AsyncExecuteRequest;
+import software.amazon.awssdk.http.async.SdkAsyncHttpClient;
+import software.amazon.awssdk.http.crt.AwsCrtAsyncHttpClient;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -26,11 +37,40 @@ public class LambdaRuntimeClient {
     private final String hostname;
     private final int port;
     private final String invocationEndpoint;
+    private final AsyncExecuteRequest nextRequest;
+
+    private static final String INVOCATION_ERROR_URL_TEMPLATE = "http://%s/2018-06-01/runtime/invocation/%s:%d/error";
+    private static final String INVOCATION_SUCCESS_URL_TEMPLATE = "http://%s/2018-06-01/runtime/invocation/%s:%d/response";
+    private static final String NEXT_URL_TEMPLATE = "http://%s/2018-06-01/runtime/invocation/next";
+    private static final String INIT_ERROR_URL_TEMPLATE = "http://%s/2018-06-01/runtime/init/error";
 
     private static final String DEFAULT_CONTENT_TYPE = "application/json";
     private static final String XRAY_ERROR_CAUSE_HEADER = "Lambda-Runtime-Function-XRay-Error-Cause";
     private static final String ERROR_TYPE_HEADER = "Lambda-Runtime-Function-Error-Type";
     private static final int XRAY_ERROR_CAUSE_MAX_HEADER_SIZE = 1024 * 1024; // 1MiB
+
+    private static final String REQUEST_ID_HEADER = "lambda-runtime-aws-request-id";
+    private static final String FUNCTION_ARN_HEADER = "lambda-runtime-invoked-function-arn";
+    private static final String DEADLINE_MS_HEADER = "lambda-runtime-deadline-ms";
+    private static final String TRACE_ID_HEADER = "lambda-runtime-trace-id";
+    private static final String CLIENT_CONTEXT_HEADER = "lambda-runtime-client-context";
+    private static final String COGNITO_IDENTITY_HEADER = "lambda-runtime-cognito-identity";
+
+    private static final String USER_AGENT = String.format(
+            "aws-lambda-java/%s",
+            System.getProperty("java.vendor.version"));
+
+    private static final NextRequestHandler NEXT_REQUEST_HANDLER = new NextRequestHandler();
+
+    private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .connectTimeout(Duration.ofDays(1))
+            .build();
+
+    private static final SdkAsyncHttpClient CRT_HTTP_CLIENT = AwsCrtAsyncHttpClient.builder().build();
+
+    public static final EmptyContentPublisher EMPTY_CONTENT_PUBLISHER = new EmptyContentPublisher();
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -38,15 +78,40 @@ public class LambdaRuntimeClient {
         this.hostname = parts[0];
         this.port = Integer.parseInt(parts[1]);
         this.invocationEndpoint = invocationEndpoint();
-        NativeClient.init();
+        this.nextRequest = AsyncExecuteRequest.builder()
+                .fullDuplex(false)
+                .responseHandler(NEXT_REQUEST_HANDLER)
+                .requestContentPublisher(EMPTY_CONTENT_PUBLISHER)
+                .request(SdkHttpRequest.builder()
+                        .uri(URI.create(String.format(NEXT_URL_TEMPLATE, hostnamePort)))
+                        .appendHeader("User-Agent", USER_AGENT)
+                        .method(SdkHttpMethod.GET)
+                        .build())
+                .build();
     }
 
     public InvocationRequest waitForNextInvocation() {
-        return NativeClient.next();
+        try {
+            CRT_HTTP_CLIENT.execute(nextRequest).get();
+        } catch (Exception e) {
+            throw new LambdaRuntimeClientException("Failed to get next invoke", e);
+        }
+
+        return NEXT_REQUEST_HANDLER.getInvocationRequest();
     }
 
     public void postInvocationResponse(String requestId, byte[] response) {
-        NativeClient.postInvocationResponse(requestId.getBytes(UTF_8), response);
+        URI endpoint = URI.create(String.format(INVOCATION_SUCCESS_URL_TEMPLATE, hostname, port, requestId));
+        HttpRequest invocationResponseRequest = HttpRequest.newBuilder(endpoint)
+                .header("User-Agent", USER_AGENT)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(response))
+                .build();
+
+        try {
+            HTTP_CLIENT.send(invocationResponseRequest, HttpResponse.BodyHandlers.discarding());
+        } catch (Exception e) {
+            throw new LambdaRuntimeClientException("Failed to post invocation result", e);
+        }
     }
 
     public void postInvocationError(String requestId, byte[] errorResponse, String errorType) throws IOException {
@@ -74,29 +139,29 @@ public class LambdaRuntimeClient {
     }
 
     private void post(String endpoint, byte[] errorResponse, String errorType, String errorCause) throws IOException {
-        URL url = createUrl(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", DEFAULT_CONTENT_TYPE);
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(endpoint))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(errorResponse))
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", DEFAULT_CONTENT_TYPE);
+
         if (errorType != null && !errorType.isEmpty()) {
-            conn.setRequestProperty(ERROR_TYPE_HEADER, errorType);
+            request.header(ERROR_TYPE_HEADER, errorType);
         }
         if (errorCause != null && errorCause.getBytes().length < XRAY_ERROR_CAUSE_MAX_HEADER_SIZE) {
-            conn.setRequestProperty(XRAY_ERROR_CAUSE_HEADER, errorCause);
-        }
-        conn.setFixedLengthStreamingMode(errorResponse.length);
-        conn.setDoOutput(true);
-        try (OutputStream outputStream = conn.getOutputStream()) {
-            outputStream.write(errorResponse);
+            request.header(XRAY_ERROR_CAUSE_HEADER, errorCause);
         }
 
-        int responseCode = conn.getResponseCode();
-        if (responseCode != HTTP_ACCEPTED) {
-            throw new LambdaRuntimeClientException(endpoint, responseCode);
+        HttpResponse<Void> response;
+        try {
+            response = HTTP_CLIENT.send(request.build(), HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException | IOException e) {
+            throw new LambdaRuntimeClientException("Failed to post error", e);
         }
 
-        // don't need to read the response, close stream to ensure connection re-use
-        closeQuietly(conn.getInputStream());
+        if (response.statusCode() != HTTP_ACCEPTED) {
+            throw new LambdaRuntimeClientException(
+                    String.format("%s Response code: '%d'.", endpoint, response.statusCode()));
+        }
     }
 
     private String invocationEndpoint() {
@@ -144,78 +209,51 @@ public class LambdaRuntimeClient {
                        Map<String, String> headers,
                        byte[] payload) throws IOException {
 
-        URL url = createUrl(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", contentType);
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(endpoint))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", DEFAULT_CONTENT_TYPE);
 
         for (Map.Entry<String, String> header : headers.entrySet()) {
-            conn.setRequestProperty(header.getKey(), header.getValue());
+            request.header(header.getKey(), header.getValue());
         }
 
-        conn.setFixedLengthStreamingMode(payload.length);
-        conn.setDoOutput(true);
-
-        try (OutputStream outputStream = conn.getOutputStream()) {
-            outputStream.write(payload);
+        HttpResponse<Void> response;
+        try {
+            response = HTTP_CLIENT.send(request.build(), HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException | IOException e) {
+            throw new LambdaRuntimeClientException("Failed to post error", e);
         }
-
-        // get response code before closing the stream
-        int responseCode = conn.getResponseCode();
-
-        // don't need to read the response, close stream to ensure connection re-use
-        closeInputStreamQuietly(conn);
-
-        return responseCode;
     }
 
     private void doGet(String endpoint, int expectedHttpResponseCode) throws IOException {
 
-        URL url = createUrl(endpoint);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(endpoint))
+                .GET()
+                .header("User-Agent", USER_AGENT)
+                .header("Content-Type", DEFAULT_CONTENT_TYPE);
 
-        int responseCode = conn.getResponseCode();
-        if (responseCode != expectedHttpResponseCode) {
-            throw new LambdaRuntimeClientException(endpoint, responseCode);
+        HttpResponse<Void> response;
+        try {
+            response = HTTP_CLIENT.send(request.build(), HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException | IOException e) {
+            throw new LambdaRuntimeClientException("Failed to post error", e);
         }
 
-        closeInputStreamQuietly(conn);
+        if (response.statusCode() != expectedHttpResponseCode) {
+            throw new LambdaRuntimeClientException(endpoint, response.statusCode());
+        }
     }
 
     private URL createUrl(String endpoint) {
+        /* 
         try {
-            return new URL(endpoint);
-        } catch (MalformedURLException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void closeQuietly(InputStream inputStream) {
-        if (inputStream == null) return;
-        try {
-            inputStream.close();
-        } catch (IOException e) {
-        }
-    }
-
-    private void closeInputStreamQuietly(HttpURLConnection conn) {
-
-        InputStream inputStream;
-        try {
-            inputStream = conn.getInputStream();
-        } catch (IOException e) {
-            return;
+            response = HTTP_CLIENT.send(nextRequest, HttpResponse.BodyHandlers.ofByteArray());
+        } catch (Exception e) {
+            throw new LambdaRuntimeClientException("Failed to get next invoke", e);
         }
 
-        if (inputStream == null) {
-            return;
-        }
-        try {
-            inputStream.close();
-        } catch (IOException e) {
-            // ignore
-        }
+        return invocationRequestFromHttpResponse(response);
+        */
     }
 }

@@ -49,13 +49,6 @@ public class LambdaRuntimeClient {
     private static final String ERROR_TYPE_HEADER = "Lambda-Runtime-Function-Error-Type";
     private static final int XRAY_ERROR_CAUSE_MAX_HEADER_SIZE = 1024 * 1024; // 1MiB
 
-    private static final String REQUEST_ID_HEADER = "lambda-runtime-aws-request-id";
-    private static final String FUNCTION_ARN_HEADER = "lambda-runtime-invoked-function-arn";
-    private static final String DEADLINE_MS_HEADER = "lambda-runtime-deadline-ms";
-    private static final String TRACE_ID_HEADER = "lambda-runtime-trace-id";
-    private static final String CLIENT_CONTEXT_HEADER = "lambda-runtime-client-context";
-    private static final String COGNITO_IDENTITY_HEADER = "lambda-runtime-cognito-identity";
-
     private static final String USER_AGENT = String.format(
             "aws-lambda-java/%s",
             System.getProperty("java.vendor.version"));
@@ -71,6 +64,7 @@ public class LambdaRuntimeClient {
     private static final SdkAsyncHttpClient CRT_HTTP_CLIENT = AwsCrtAsyncHttpClient.builder().build();
 
     public static final EmptyContentPublisher EMPTY_CONTENT_PUBLISHER = new EmptyContentPublisher();
+<<<<<<< HEAD
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -78,6 +72,16 @@ public class LambdaRuntimeClient {
         this.hostname = parts[0];
         this.port = Integer.parseInt(parts[1]);
         this.invocationEndpoint = invocationEndpoint();
+=======
+
+    private final String hostnamePort;
+
+    private final AsyncExecuteRequest nextRequest;
+
+    public LambdaRuntimeClient(String hostnamePort) {
+        Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
+        this.hostnamePort = hostnamePort;
+>>>>>>> 8f8d8ea (Implement next() with CRT client)
         this.nextRequest = AsyncExecuteRequest.builder()
                 .fullDuplex(false)
                 .responseHandler(NEXT_REQUEST_HANDLER)
@@ -91,6 +95,10 @@ public class LambdaRuntimeClient {
     }
 
     public InvocationRequest waitForNextInvocation() {
+<<<<<<< HEAD
+=======
+
+>>>>>>> 8f8d8ea (Implement next() with CRT client)
         try {
             CRT_HTTP_CLIENT.execute(nextRequest).get();
         } catch (Exception e) {
@@ -100,8 +108,13 @@ public class LambdaRuntimeClient {
         return NEXT_REQUEST_HANDLER.getInvocationRequest();
     }
 
+<<<<<<< HEAD
     public void postInvocationResponse(String requestId, byte[] response) {
         URI endpoint = URI.create(String.format(INVOCATION_SUCCESS_URL_TEMPLATE, hostname, port, requestId));
+=======
+    public void postInvocationSuccess(String requestId, byte[] response) {
+        URI endpoint = URI.create(String.format(INVOCATION_SUCCESS_URL_TEMPLATE, hostnamePort, requestId));
+>>>>>>> 8f8d8ea (Implement next() with CRT client)
         HttpRequest invocationResponseRequest = HttpRequest.newBuilder(endpoint)
                 .header("User-Agent", USER_AGENT)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(response))

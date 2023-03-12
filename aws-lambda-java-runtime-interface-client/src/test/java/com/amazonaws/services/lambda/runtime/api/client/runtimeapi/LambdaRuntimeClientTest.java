@@ -133,6 +133,7 @@ class LambdaRuntimeClientTest {
 
         Exception exception = assertThrows(LambdaRuntimeClientException.class, () -> runtimeClient.postInvocationError(invocationError));
         String expectedMessage = "http://" + getHostnamePort() + "/2018-06-01/runtime/invocation/" + requestId + "/error Response code: '200'.";
+
         assertEquals(expectedMessage, exception.getMessage());
     }
 

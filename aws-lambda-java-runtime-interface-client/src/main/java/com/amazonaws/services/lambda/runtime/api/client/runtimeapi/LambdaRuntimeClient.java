@@ -1,14 +1,12 @@
 package com.amazonaws.services.lambda.runtime.api.client.runtimeapi;
 
 import reactor.core.publisher.Mono;
-import reactor.netty.ByteBufMono;
 import reactor.netty.http.client.HttpClient;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelOption;
 import reactor.netty.http.client.HttpClientResponse;
-import reactor.netty.http.client.HttpClient.ResponseReceiver;
 import reactor.util.function.Tuple2;
 
 import java.io.IOException;

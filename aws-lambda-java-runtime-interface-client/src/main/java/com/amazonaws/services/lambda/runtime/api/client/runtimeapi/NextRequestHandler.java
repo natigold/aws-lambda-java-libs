@@ -42,7 +42,7 @@ public class NextRequestHandler implements SdkAsyncHttpResponseHandler {
 
         InvocationRequest result = new InvocationRequest();
 
-        result.content = BODY_BYTEBUFFER_SUBSCRIBER.getPaload();
+        result.setContent(BODY_BYTEBUFFER_SUBSCRIBER.getPaload());
 
         result.id = headers.firstMatchingHeader(REQUEST_ID_HEADER).orElseThrow(
                 () -> new LambdaRuntimeClientException("Request ID absent"));

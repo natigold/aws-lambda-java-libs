@@ -34,11 +34,11 @@ class LambdaRuntimeClientTest {
     }
 
     @Test
-    void postInvocationSuccess() throws InterruptedException {
+    void postInvocationResponse() throws InterruptedException {
         mockWebServer.enqueue(new MockResponse());
         String requestId = UUID.randomUUID().toString();
         String body = "{}";
-        runtimeClient.postInvocationSuccess(requestId, body.getBytes());
+        runtimeClient.postInvocationResponse(requestId, body.getBytes());
 
         RecordedRequest recordedRequest = mockWebServer.takeRequest();
         HttpUrl actualUrl = recordedRequest.getRequestUrl();
@@ -61,11 +61,7 @@ class LambdaRuntimeClientTest {
         String requestId = UUID.randomUUID().toString();
         String errorResponse = "{}";
         String errorType = "errorType";
-        InvocationError invocationError = InvocationError.newBuilder(errorResponse.getBytes())
-                .setId(requestId)
-                .setErrorType(errorType)
-                .build();
-        runtimeClient.postInvocationError(invocationError);
+        runtimeClient.postInvocationError(requestId, errorResponse.getBytes(), errorType);
 
         RecordedRequest recordedRequest = mockWebServer.takeRequest();
         HttpUrl actualUrl = recordedRequest.getRequestUrl();
@@ -92,12 +88,7 @@ class LambdaRuntimeClientTest {
         String errorResponse = "{}";
         String errorType = "errorType";
         String errorCause = "errorCause";
-        InvocationError invocationError = InvocationError.newBuilder(errorResponse.getBytes())
-                .setId(requestId)
-                .setErrorType(errorType)
-                .setErrorCause(errorCause)
-                .build();
-        runtimeClient.postInvocationError(invocationError);
+        runtimeClient.postInvocationError(requestId, errorResponse.getBytes(), errorType, errorCause);
 
         RecordedRequest recordedRequest = mockWebServer.takeRequest();
         HttpUrl actualUrl = recordedRequest.getRequestUrl();
@@ -126,12 +117,7 @@ class LambdaRuntimeClientTest {
         String requestId = UUID.randomUUID().toString();
         String errorResponse = "{}";
         String errorType = "errorType";
-        InvocationError invocationError = InvocationError.newBuilder(errorResponse.getBytes())
-                .setId(requestId)
-                .setErrorType(errorType)
-                .build();
-
-        Exception exception = assertThrows(LambdaRuntimeClientException.class, () -> runtimeClient.postInvocationError(invocationError));
+        Exception exception = assertThrows(LambdaRuntimeClientException.class, () -> runtimeClient.postInvocationError(requestId, errorResponse.getBytes(), errorType));
         String expectedMessage = "http://" + getHostnamePort() + "/2018-06-01/runtime/invocation/" + requestId + "/error Response code: '200'.";
         assertEquals(expectedMessage, exception.getMessage());
     }
@@ -143,10 +129,7 @@ class LambdaRuntimeClientTest {
         mockWebServer.enqueue(mockResponse);
         String errorResponse = "{}";
         String errorType = "errorType";
-        InvocationError invocationError = InvocationError.newBuilder(errorResponse.getBytes())
-                .setErrorType(errorType)
-                .build();
-        runtimeClient.postInitError(invocationError);
+        runtimeClient.postInitError(errorResponse.getBytes(), errorType);
 
         RecordedRequest recordedRequest = mockWebServer.takeRequest();
         HttpUrl actualUrl = recordedRequest.getRequestUrl();

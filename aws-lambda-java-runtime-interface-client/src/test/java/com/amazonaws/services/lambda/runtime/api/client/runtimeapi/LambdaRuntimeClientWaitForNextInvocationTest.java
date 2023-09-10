@@ -10,8 +10,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.matchers.JUnitMatchers;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
@@ -46,7 +51,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     }
 
     @Test
-    void waitForNextInvocation_basic() throws InterruptedException {
+    void waitForNextInvocation_basic() throws InterruptedException, IOException {
         mockWebServer.enqueue(response);
 
         InvocationRequest result = runtimeClient.waitForNextInvocation();
@@ -56,7 +61,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
         assertNull(result.getXrayTraceId());
         assertNull(result.getClientContext());
         assertNull(result.getCognitoIdentity());
-        assertEquals(body, new String(result.content));
+        assertEquals(body, new String(result.getContentAsStream().readAllBytes()));
 
         RecordedRequest recordedRequest = mockWebServer.takeRequest();
 

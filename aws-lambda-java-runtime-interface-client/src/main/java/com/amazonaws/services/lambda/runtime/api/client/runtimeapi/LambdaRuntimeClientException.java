@@ -22,6 +22,6 @@ public class LambdaRuntimeClientException extends RuntimeException {
     }
     
     public LambdaRuntimeClientException(String message, int responseCode) {
-        super(message + "Response code: '" + responseCode + "'.");
+        super(message + " Response code: '" + responseCode + "'.");
     }
 }

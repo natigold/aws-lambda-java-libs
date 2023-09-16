@@ -40,8 +40,8 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
 
         requestId = UUID.randomUUID().toString();
 
-        response.addHeader("lambda-runtime-aws-request-id", requestId);
-        response.addHeader("lambda-runtime-invoked-function-arn", functionArn);
+        response.addHeader("Lambda-Runtime-Aws-Request-Id", requestId);
+        response.addHeader("Lambda-Runtime-Invoked-Function-Arn", functionArn);
         response.setBody(body);
     }
 
@@ -77,7 +77,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_delay() {
         int runtimeDeadlineMs = 5000;
-        response.addHeader("lambda-runtime-deadline-ms", runtimeDeadlineMs);
+        response.addHeader("Lambda-Runtime-Deadline-Ms", runtimeDeadlineMs);
         mockWebServer.enqueue(response);
 
         InvocationRequest result = runtimeClient.waitForNextInvocation();
@@ -87,7 +87,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_traceId() {
         String traceId = UUID.randomUUID().toString();
-        response.addHeader("lambda-runtime-trace-id", traceId);
+        response.addHeader("Lambda-Runtime-Trace-Id", traceId);
         mockWebServer.enqueue(response);
 
         InvocationRequest result = runtimeClient.waitForNextInvocation();
@@ -97,7 +97,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_clientContext() {
         String clientContext = UUID.randomUUID().toString();
-        response.addHeader("lambda-runtime-client-context", clientContext);
+        response.addHeader("Lambda-Runtime-Client-Context", clientContext);
         mockWebServer.enqueue(response);
 
         InvocationRequest result = runtimeClient.waitForNextInvocation();
@@ -107,7 +107,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_cognito() {
         String cognitoIdentity = UUID.randomUUID().toString();
-        response.addHeader("lambda-runtime-cognito-identity", cognitoIdentity);
+        response.addHeader("Lambda-Runtime-Cognito-Identity", cognitoIdentity);
         mockWebServer.enqueue(response);
 
         InvocationRequest result = runtimeClient.waitForNextInvocation();
@@ -117,7 +117,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_functionArnAbsent() {
         MockResponse invalidResponse = new MockResponse();
-        invalidResponse.addHeader("lambda-runtime-aws-request-id", requestId);
+        invalidResponse.addHeader("Lambda-Runtime-Aws-Request-Id", requestId);
         mockWebServer.enqueue(invalidResponse);
 
         Exception exception = assertThrows(LambdaRuntimeClientException.class, () -> runtimeClient.waitForNextInvocation());
@@ -127,7 +127,7 @@ class LambdaRuntimeClientWaitForNextInvocationTest {
     @Test
     void waitForNextInvocation_requestIdAbsent() {
         MockResponse invalidResponse = new MockResponse();
-        invalidResponse.addHeader("lambda-runtime-invoked-function-arn", functionArn);
+        invalidResponse.addHeader("Lambda-Runtime-Invoked-Function-Arn", functionArn);
         mockWebServer.enqueue(invalidResponse);
 
         Exception exception = assertThrows(LambdaRuntimeClientException.class, () -> runtimeClient.waitForNextInvocation());

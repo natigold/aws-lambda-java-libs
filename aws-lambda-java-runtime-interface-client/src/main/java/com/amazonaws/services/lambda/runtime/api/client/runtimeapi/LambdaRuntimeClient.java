@@ -5,7 +5,6 @@ import software.amazon.awssdk.crt.CrtResource;
 import software.amazon.awssdk.crt.http.HttpClientConnection;
 import software.amazon.awssdk.crt.http.HttpClientConnectionManager;
 import software.amazon.awssdk.crt.http.HttpClientConnectionManagerOptions;
-import software.amazon.awssdk.crt.http.HttpVersion;
 import software.amazon.awssdk.crt.http.HttpRequest;
 import software.amazon.awssdk.crt.io.ClientBootstrap;
 import software.amazon.awssdk.crt.io.EventLoopGroup;
@@ -15,7 +14,6 @@ import software.amazon.awssdk.crt.http.HttpHeader;
 import software.amazon.awssdk.crt.http.HttpRequestBase;
 import software.amazon.awssdk.crt.http.HttpStreamBase;
 import software.amazon.awssdk.crt.http.HttpRequestBodyStream;
-import software.amazon.awssdk.crt.http.HttpStream;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,7 +24,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -64,6 +61,7 @@ public class LambdaRuntimeClient {
             System.getProperty("java.vendor.version"));
 
     private HttpClientConnectionManager connPool = null;
+    private HttpClientConnection conn = null;
 
     private CompletableFuture<Void> shutdownComplete = null;
     private boolean actuallyConnected = false;
@@ -79,8 +77,11 @@ public class LambdaRuntimeClient {
             URI uri = new URI(getBaseUrl());
             this.connPool = createConnectionPoolManager(uri);
             this.shutdownComplete = connPool.getShutdownCompleteFuture();
+
+            this.conn = connPool.acquireConnection().get(60, TimeUnit.SECONDS);
+            this.actuallyConnected = true;
         } catch (Exception e) {
-            throw new LambdaRuntimeClientException("Failed to initalize ConnectionPoolManager", e);
+            throw new LambdaRuntimeClientException("Failed to initialize connection", e);
         }
     }
 
@@ -339,17 +340,15 @@ public class LambdaRuntimeClient {
         CompletableFuture<Void> requestCompletableFuture = new CompletableFuture<>();
         CrtStreamResponseHandler responseHandler = new CrtStreamResponseHandler(requestCompletableFuture);
 
-        try (HttpClientConnection conn = connPool.acquireConnection().get(60, TimeUnit.SECONDS)) {
-            this.actuallyConnected = true;
-
-            HttpStreamBase stream = conn.makeRequest(request, responseHandler);
-            stream.activate();
-            requestCompletableFuture.get(60, TimeUnit.SECONDS);
-            stream.close();
-
-        } catch (Exception e) {
-            throw new LambdaRuntimeClientException(e);
+        if (!actuallyConnected) {
+            this.conn = connPool.acquireConnection().get(60, TimeUnit.SECONDS);
+            actuallyConnected = true;
         }
+
+        HttpStreamBase stream = conn.makeRequest(request, responseHandler);
+        stream.activate();
+        requestCompletableFuture.get(60, TimeUnit.SECONDS);
+        stream.close();
 
         return responseHandler;
     }

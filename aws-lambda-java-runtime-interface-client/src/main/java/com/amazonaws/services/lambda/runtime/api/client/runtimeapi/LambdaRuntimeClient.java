@@ -1,19 +1,10 @@
 package com.amazonaws.services.lambda.runtime.api.client.runtimeapi;
 
-import software.amazon.awssdk.crt.CRT;
-import software.amazon.awssdk.crt.CrtResource;
-import software.amazon.awssdk.crt.http.HttpClientConnection;
-import software.amazon.awssdk.crt.http.HttpClientConnectionManager;
-import software.amazon.awssdk.crt.http.HttpClientConnectionManagerOptions;
-import software.amazon.awssdk.crt.http.HttpRequest;
-import software.amazon.awssdk.crt.io.ClientBootstrap;
-import software.amazon.awssdk.crt.io.EventLoopGroup;
-import software.amazon.awssdk.crt.io.HostResolver;
-import software.amazon.awssdk.crt.io.SocketOptions;
-import software.amazon.awssdk.crt.http.HttpHeader;
-import software.amazon.awssdk.crt.http.HttpRequestBase;
-import software.amazon.awssdk.crt.http.HttpStreamBase;
-import software.amazon.awssdk.crt.http.HttpRequestBodyStream;
+import io.undertow.client.ClientConnection;
+import io.undertow.client.ClientRequest;
+import io.undertow.client.ClientResponse;
+import io.undertow.util.Headers;
+import io.undertow.util.HttpString;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,17 +12,19 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
-import static software.amazon.awssdk.crt.utils.ByteBufferUtils.transferData;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
+import com.networknt.client.Http2Client;
+import static com.networknt.client.Http2Client.*;
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_OK;
 
@@ -56,15 +49,19 @@ public class LambdaRuntimeClient {
     private static final String ERROR_TYPE_HEADER = "Lambda-Runtime-Function-Error-Type";
     private static final int XRAY_ERROR_CAUSE_MAX_HEADER_SIZE = 1024 * 1024; // 1MiB
 
+    private static final String REQUEST_ID_HEADER = "Lambda-Runtime-Aws-Request-Id";
+    private static final String FUNCTION_ARN_HEADER = "Lambda-Runtime-Invoked-Function-Arn";
+    private static final String DEADLINE_MS_HEADER = "Lambda-Runtime-Deadline-Ms";
+    private static final String TRACE_ID_HEADER = "Lambda-Runtime-Trace-Id";
+    private static final String CLIENT_CONTEXT_HEADER = "Lambda-Runtime-Client-Context";
+    private static final String COGNITO_IDENTITY_HEADER = "Lambda-Runtime-Cognito-Identity";
+
     private static final String USER_AGENT = String.format(
             "aws-lambda-java/%s",
             System.getProperty("java.vendor.version"));
 
-    private HttpClientConnectionManager connPool = null;
-    private HttpClientConnection conn = null;
-
-    private CompletableFuture<Void> shutdownComplete = null;
-    private boolean actuallyConnected = false;
+    private final ClientConnection conn;
+    private final Http2Client client = Http2Client.getInstance();
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -75,41 +72,26 @@ public class LambdaRuntimeClient {
 
         try {
             URI uri = new URI(getBaseUrl());
-            this.connPool = createConnectionPoolManager(uri);
-            this.shutdownComplete = connPool.getShutdownCompleteFuture();
-
-            this.conn = connPool.acquireConnection().get(60, TimeUnit.SECONDS);
-            this.actuallyConnected = true;
+            this.conn = createConnection(uri);
         } catch (Exception e) {
             throw new LambdaRuntimeClientException("Failed to initialize connection", e);
         }
     }
 
-    private HttpClientConnectionManager createConnectionPoolManager(URI uri) {
-        try (EventLoopGroup eventLoopGroup = new EventLoopGroup(1);
-                HostResolver resolver = new HostResolver(eventLoopGroup);
-                ClientBootstrap bootstrap = new ClientBootstrap(eventLoopGroup, resolver);
-                SocketOptions sockOpts = new SocketOptions();) {
-
-            HttpClientConnectionManagerOptions options = new HttpClientConnectionManagerOptions()
-                    .withClientBootstrap(bootstrap)
-                    .withSocketOptions(sockOpts)
-                    .withUri(uri);
-
-            return HttpClientConnectionManager.create(options);
-        }
+    private ClientConnection createConnection(URI uri) throws Exception {
+        CompletableFuture<ClientConnection> clienFuture = this.client.connectAsync(uri, false);
+        return clienFuture.get(1000, TimeUnit.MILLISECONDS);
     }
 
     public InvocationRequest waitForNextInvocation() {
-        return doRequest("GET", getBaseUrl(), NEXT_INVOCATION_PATH, new byte[0], false, 200)
-                .getInvocationRequest();
+        return getInvocationRequest(doRequest("GET", NEXT_INVOCATION_PATH, new byte[0]));
     }
 
     public void postInvocationResponse(String requestId, byte[] response) {
         String path = String.format(INVOCATION_SUCCESS_PATH_TEMPLATE, requestId);
 
         try {
-            doRequest("POST", getBaseUrl(), path, response, false, HTTP_OK);
+            doRequest("POST", path, response);
         } catch (Exception e) {
             throw new LambdaRuntimeClientException("Failed to post invocation result", e);
         }
@@ -286,70 +268,82 @@ public class LambdaRuntimeClient {
         }
     }
     
-    public CrtStreamResponseHandler doRequest(String method, String endpoint, String path, byte[] requestBody,
-            boolean useChunkedEncoding, int expectedStatus) {
-        URI uri = null;
+    public ClientResponse doRequest(String method, String path, byte[] requestBody) {
+        final AtomicReference<ClientResponse> reference = new AtomicReference<>();
+        final CountDownLatch latch = new CountDownLatch(1);
 
         try {
-            uri = new URI(endpoint);
-        } catch (URISyntaxException e) {
-            throw new LambdaRuntimeClientException("Error forming URI", e);
+            this.conn.getIoThread().execute(new Runnable() {
+                @Override
+                public void run() {
+                    final ClientRequest request = new ClientRequest().setMethod(new HttpString(method)).setPath(path);
+
+                    request.getRequestHeaders().put(Headers.HOST, getBaseUrl());
+                    request.getRequestHeaders().put(Headers.USER_AGENT, USER_AGENT);
+
+                    if (Objects.nonNull(requestBody) && requestBody.length > 0) {
+                        request.getRequestHeaders().put(Headers.CONTENT_LENGTH, Integer.toString(requestBody.length));
+
+                    }
+
+                    conn.sendRequest(request, client.createClientCallback(reference, latch, new String(requestBody)));
+                }
+            });
+            latch.await(10, TimeUnit.SECONDS);
+            return reference.get();
+        } catch (InterruptedException e) {
+            throw new LambdaRuntimeClientException("Failed to make request", e);
         }
-
-        HttpHeader[] requestHeaders = new HttpHeader[] { 
-            new HttpHeader("Host", uri.getHost()),
-            new HttpHeader("Content-Length", Integer.toString(requestBody.length)),
-            new HttpHeader("User-Agent", USER_AGENT) 
-        };
-        
-        final ByteBuffer bodyBytesIn = ByteBuffer.wrap(requestBody);
-   
-        HttpRequestBodyStream bodyStream = new HttpRequestBodyStream() {
-            @Override
-            public boolean sendRequestBody(ByteBuffer bodyBytesOut) {
-                transferData(bodyBytesIn, bodyBytesOut);
-
-                return bodyBytesIn.remaining() == 0;
-            }
-
-            @Override
-            public boolean resetPosition() {
-                bodyBytesIn.position(0);
-
-                return true;
-            }
-        };
-
-        HttpRequest request = new HttpRequest(method, path, requestHeaders, bodyStream);
-
-        if (request.getBodyStream() != null) {
-            request.getBodyStream().resetPosition();
-        }
-
-        CrtStreamResponseHandler response = null;
-        try {
-            response = getResponse(uri, request);
-        } catch (Exception ex) {
-            throw new LambdaRuntimeClientException("Failed to get response from request", ex);
-        }
-
-        return response;
     }
 
-    public CrtStreamResponseHandler getResponse(URI uri, HttpRequestBase request) throws Exception {
-        CompletableFuture<Void> requestCompletableFuture = new CompletableFuture<>();
-        CrtStreamResponseHandler responseHandler = new CrtStreamResponseHandler(requestCompletableFuture);
+    public InvocationRequest getInvocationRequest(ClientResponse response) {
+        InvocationRequest request = new InvocationRequest();
 
-        if (!actuallyConnected) {
-            this.conn = connPool.acquireConnection().get(60, TimeUnit.SECONDS);
-            actuallyConnected = true;
-        }
+        request.setContent(response.getAttachment(Http2Client.RESPONSE_BODY).getBytes());
 
-        HttpStreamBase stream = conn.makeRequest(request, responseHandler);
-        stream.activate();
-        requestCompletableFuture.get(60, TimeUnit.SECONDS);
-        stream.close();
+        request.id = null;
+        request.invokedFunctionArn = null;
+        request.deadlineTimeInMs = 0;
+        request.xrayTraceId = null;
+        request.clientContext = null;
+        request.cognitoIdentity = null;
 
-        return responseHandler;
+        response.getResponseHeaders().forEach(header -> {
+            switch (header.getHeaderName().toString()) {
+                case REQUEST_ID_HEADER:
+                    request.id = header.getFirst();
+                    break;
+            
+                case FUNCTION_ARN_HEADER:
+                    request.invokedFunctionArn = header.getFirst();
+                    break;
+            
+                case DEADLINE_MS_HEADER:
+                    request.deadlineTimeInMs = Long.parseLong(header.getFirst());
+                    break;
+            
+                case TRACE_ID_HEADER:
+                    request.xrayTraceId = header.getFirst();
+                    break;
+            
+                case CLIENT_CONTEXT_HEADER:
+                    request.clientContext = header.getFirst();
+                    break;
+            
+                case COGNITO_IDENTITY_HEADER:
+                    request.cognitoIdentity = header.getFirst();
+                    break;
+            
+                default:
+                    break;
+            }
+        });
+
+        Optional.ofNullable(request.id)
+                .orElseThrow(() -> new LambdaRuntimeClientException("Request ID absent"));
+        Optional.ofNullable(request.invokedFunctionArn)
+                .orElseThrow(() -> new LambdaRuntimeClientException("Function ARN absent"));
+
+        return request;
     }
 }

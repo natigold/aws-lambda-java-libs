@@ -24,7 +24,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.networknt.client.Http2Client;
-import static com.networknt.client.Http2Client.*;
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_OK;
 
@@ -61,7 +60,7 @@ public class LambdaRuntimeClient {
             System.getProperty("java.vendor.version"));
 
     private final ClientConnection conn;
-    private final Http2Client client = Http2Client.getInstance();
+    private final Http2Client client;
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -72,6 +71,7 @@ public class LambdaRuntimeClient {
 
         try {
             URI uri = new URI(getBaseUrl());
+            this.client = Http2Client.getInstance();
             this.conn = createConnection(uri);
         } catch (Exception e) {
             throw new LambdaRuntimeClientException("Failed to initialize connection", e);
@@ -79,8 +79,8 @@ public class LambdaRuntimeClient {
     }
 
     private ClientConnection createConnection(URI uri) throws Exception {
-        CompletableFuture<ClientConnection> clienFuture = this.client.connectAsync(uri, false);
-        return clienFuture.get(1000, TimeUnit.MILLISECONDS);
+        CompletableFuture<ClientConnection> clientFuture = this.client.connectAsync(uri, false);
+        return clientFuture.get(1000, TimeUnit.MILLISECONDS);
     }
 
     public InvocationRequest waitForNextInvocation() {
@@ -278,7 +278,7 @@ public class LambdaRuntimeClient {
                 public void run() {
                     final ClientRequest request = new ClientRequest().setMethod(new HttpString(method)).setPath(path);
 
-                    request.getRequestHeaders().put(Headers.HOST, getBaseUrl());
+                    request.getRequestHeaders().put(Headers.HOST, hostname + ":" + port);
                     request.getRequestHeaders().put(Headers.USER_AGENT, USER_AGENT);
 
                     if (Objects.nonNull(requestBody) && requestBody.length > 0) {
@@ -289,6 +289,7 @@ public class LambdaRuntimeClient {
                     conn.sendRequest(request, client.createClientCallback(reference, latch, new String(requestBody)));
                 }
             });
+            
             latch.await(10, TimeUnit.SECONDS);
             return reference.get();
         } catch (InterruptedException e) {

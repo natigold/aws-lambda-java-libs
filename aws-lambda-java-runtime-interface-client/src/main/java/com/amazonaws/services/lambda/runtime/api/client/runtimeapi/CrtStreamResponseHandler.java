@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import software.amazon.awssdk.crt.http.HttpHeader;
@@ -76,57 +78,48 @@ public class CrtStreamResponseHandler implements HttpStreamBaseResponseHandler {
 
         request.setContent(getBodyBytes());
 
-        request.id = this.headers.stream()
-                .filter(header -> REQUEST_ID_HEADER.equals(header.getName()))
-                .findFirst()
-                .orElseThrow(() -> new LambdaRuntimeClientException("Request ID absent"))
-                .getValue();
+        request.id = null;
+        request.invokedFunctionArn = null;
+        request.deadlineTimeInMs = 0;
+        request.xrayTraceId = null;
+        request.clientContext = null;
+        request.cognitoIdentity = null;
 
-        request.invokedFunctionArn = this.headers.stream()
-                .filter(header -> FUNCTION_ARN_HEADER.equals(header.getName()))
-                .findFirst()
-                .orElseThrow(() -> new LambdaRuntimeClientException("Function ARN absent"))
-                .getValue();
+        this.headers.stream().forEach(header -> {
+            switch (header.getName()) {
+                case REQUEST_ID_HEADER:
+                    request.id = header.getValue();
+                    break;
+            
+                case FUNCTION_ARN_HEADER:
+                    request.invokedFunctionArn = header.getValue();
+                    break;
+            
+                case DEADLINE_MS_HEADER:
+                    request.deadlineTimeInMs = Long.parseLong(header.getValue());
+                    break;
+            
+                case TRACE_ID_HEADER:
+                    request.xrayTraceId = header.getValue();
+                    break;
+            
+                case CLIENT_CONTEXT_HEADER:
+                    request.clientContext = header.getValue();
+                    break;
+            
+                case COGNITO_IDENTITY_HEADER:
+                    request.cognitoIdentity = header.getValue();
+                    break;
+            
+                default:
+                    break;
+            }
+        });
 
-        try {
-            request.deadlineTimeInMs = Long.parseLong(this.headers.stream()
-                    .filter(header -> DEADLINE_MS_HEADER.equals(header.getName()))
-                    .findFirst()
-                    .orElse(null)
-                    .getValue());
-        } catch (NullPointerException ex) {
-            request.deadlineTimeInMs = 0;
-        }        
-
-        try {
-            request.xrayTraceId = this.headers.stream()
-                    .filter(header -> TRACE_ID_HEADER.equals(header.getName()))
-                    .findFirst()
-                    .orElse(null)
-                    .getValue();
-        } catch (NullPointerException ex) {
-            request.xrayTraceId = null;
-        }        
-
-        try {
-            request.clientContext = this.headers.stream()
-                    .filter(header -> CLIENT_CONTEXT_HEADER.equals(header.getName()))
-                    .findFirst()
-                    .orElse(null)
-                    .getValue();
-        } catch (NullPointerException ex) {
-            request.clientContext = null;
-        }
-
-        try {
-            request.cognitoIdentity = this.headers.stream()
-                    .filter(header -> COGNITO_IDENTITY_HEADER.equals(header.getName()))
-                    .findFirst()
-                    .orElse(null)
-                    .getValue();
-        } catch (NullPointerException ex) {
-            request.cognitoIdentity = null;
-        }
+        Optional.ofNullable(request.id)
+                .orElseThrow(() -> new LambdaRuntimeClientException("Request ID absent"));
+        Optional.ofNullable(request.invokedFunctionArn)
+                .orElseThrow(() -> new LambdaRuntimeClientException("Function ARN absent"));
 
         return request;
     }

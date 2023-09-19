@@ -19,8 +19,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.networknt.client.Http2Client;
@@ -59,8 +60,9 @@ public class LambdaRuntimeClient {
             "aws-lambda-java/%s",
             System.getProperty("java.vendor.version"));
 
-    private final ClientConnection conn;
     private final Http2Client client;
+    private final URI uri;
+    private ClientConnection conn;
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -70,17 +72,18 @@ public class LambdaRuntimeClient {
         this.invocationEndpoint = invocationEndpoint();
 
         try {
-            URI uri = new URI(getBaseUrl());
+            this.uri = new URI(getBaseUrl());
             this.client = Http2Client.getInstance();
             this.conn = createConnection(uri);
+
         } catch (Exception e) {
             throw new LambdaRuntimeClientException("Failed to initialize connection", e);
         }
     }
 
-    private ClientConnection createConnection(URI uri) throws Exception {
-        CompletableFuture<ClientConnection> clientFuture = this.client.connectAsync(uri, false);
-        return clientFuture.get(1000, TimeUnit.MILLISECONDS);
+    private ClientConnection createConnection(URI uri) throws InterruptedException, ExecutionException, TimeoutException {
+        return this.client.connectAsync(uri, false)
+                .get(10000, TimeUnit.MILLISECONDS);
     }
 
     public InvocationRequest waitForNextInvocation() {
@@ -273,7 +276,11 @@ public class LambdaRuntimeClient {
         final CountDownLatch latch = new CountDownLatch(1);
 
         try {
-            this.conn.getIoThread().execute(new Runnable() {
+            if (Objects.isNull(conn) || !conn.isOpen()) {
+                this.conn = createConnection(uri);
+            }
+            
+            conn.getIoThread().execute(new Runnable() {
                 @Override
                 public void run() {
                     final ClientRequest request = new ClientRequest().setMethod(new HttpString(method)).setPath(path);
@@ -289,10 +296,10 @@ public class LambdaRuntimeClient {
                     conn.sendRequest(request, client.createClientCallback(reference, latch, new String(requestBody)));
                 }
             });
-            
+
             latch.await(10, TimeUnit.SECONDS);
             return reference.get();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
             throw new LambdaRuntimeClientException("Failed to make request", e);
         }
     }

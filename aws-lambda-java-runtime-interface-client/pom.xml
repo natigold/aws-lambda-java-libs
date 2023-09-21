@@ -36,7 +36,6 @@
         <jacoco.maven.plugin.version>0.8.8</jacoco.maven.plugin.version>
         <aws-java-core.version>1.2.3</aws-java-core.version>
         <aws-java-serialization.version>1.1.2</aws-java-serialization.version>
-        <light-4j.version>2.1.26</light-4j.version>
         <junit-jupiter.version>5.9.2</junit-jupiter.version>
         <!--
             The test/integration/codebuild/buildspec.*.yml files will set -DmultiArch=false
@@ -64,9 +63,9 @@
         </dependency>
 
         <dependency>
-            <groupId>com.networknt</groupId>
-            <artifactId>client</artifactId>
-            <version>${light-4j.version}</version>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20211205</version>
         </dependency>
 
         <dependency>

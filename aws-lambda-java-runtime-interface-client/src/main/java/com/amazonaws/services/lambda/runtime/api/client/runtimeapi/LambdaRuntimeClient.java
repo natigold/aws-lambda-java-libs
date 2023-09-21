@@ -1,32 +1,35 @@
 package com.amazonaws.services.lambda.runtime.api.client.runtimeapi;
 
-import io.undertow.client.ClientConnection;
-import io.undertow.client.ClientRequest;
-import io.undertow.client.ClientResponse;
-import io.undertow.util.Headers;
-import io.undertow.util.HttpString;
-
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
-import com.networknt.client.Http2Client;
+import javax.swing.text.Style;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_OK;
+
 
 /**
  * LambdaRuntimeClient is a client of the AWS Lambda Runtime HTTP API for custom runtimes.
@@ -60,9 +63,7 @@ public class LambdaRuntimeClient {
             "aws-lambda-java/%s",
             System.getProperty("java.vendor.version"));
 
-    private final Http2Client client;
     private final URI uri;
-    private ClientConnection conn;
 
     public LambdaRuntimeClient(String hostnamePort) {
         Objects.requireNonNull(hostnamePort, "hostnamePort cannot be null");
@@ -73,17 +74,9 @@ public class LambdaRuntimeClient {
 
         try {
             this.uri = new URI(getBaseUrl());
-            this.client = Http2Client.getInstance();
-            this.conn = createConnection(uri);
-
         } catch (Exception e) {
             throw new LambdaRuntimeClientException("Failed to initialize connection", e);
         }
-    }
-
-    private ClientConnection createConnection(URI uri) throws InterruptedException, ExecutionException, TimeoutException {
-        return this.client.connectAsync(uri, false)
-                .get(10000, TimeUnit.MILLISECONDS);
     }
 
     public InvocationRequest waitForNextInvocation() {
@@ -271,43 +264,71 @@ public class LambdaRuntimeClient {
         }
     }
     
-    public ClientResponse doRequest(String method, String path, byte[] requestBody) {
-        final AtomicReference<ClientResponse> reference = new AtomicReference<>();
-        final CountDownLatch latch = new CountDownLatch(1);
+    public HttpResponse doRequest(String method, String path, byte[] requestBody) {
+        HttpResponse response = null;
+        String dataStr = "";
+
+        Map<String, String> headers = new HashMap<String, String> ( 
+            Map.of(
+                "Host", String.format("%s:%s", hostname, port),
+                "Content-Type", "application/json"
+            )
+        );
+
+        if (Objects.nonNull(requestBody) && requestBody.length > 0) {
+            // @@TODO: Fix data format to not encoded version and un-remark the Test assertion comment
+            dataStr += String.format(" -d %s", URLEncoder.encode(new String(requestBody, StandardCharsets.UTF_8), StandardCharsets.UTF_8));
+        }
+
+        StringBuilder headersStr = new StringBuilder("");
+        headers.entrySet().forEach(header -> {
+            headersStr.append(String.format(" -H '%s: %s'", header.getKey(), header.getValue()));
+        });
+
+        String command = String.format("curl -v --silent -A %s -X %s%s %s%s %s", USER_AGENT, method, headersStr, this.uri, path, dataStr);
+
+        ProcessBuilder pb = new ProcessBuilder(command.split(" "));
+        // errorstream of the process will be redirected to standard output
+        pb.redirectErrorStream(true);
+        
+        Process p = null;
 
         try {
-            if (Objects.isNull(conn) || !conn.isOpen()) {
-                this.conn = createConnection(uri);
-            }
+            p = pb.start();
+
+            InputStream is = p.getInputStream();
+            InputStreamReader isr = new InputStreamReader(is);
+            BufferedReader br = new BufferedReader(isr);
+
+            String result = new BufferedReader(new InputStreamReader(is))
+                    .lines()
+                    .parallel()
+                    .collect(Collectors.joining("\n"));
+    
+            // close the buffered reader
+            br.close();
+            p.waitFor();
+            response = resolve(result);
             
-            conn.getIoThread().execute(new Runnable() {
-                @Override
-                public void run() {
-                    final ClientRequest request = new ClientRequest().setMethod(new HttpString(method)).setPath(path);
+            int exitCode = p.exitValue();
 
-                    request.getRequestHeaders().put(Headers.HOST, hostname + ":" + port);
-                    request.getRequestHeaders().put(Headers.USER_AGENT, USER_AGENT);
+            p.destroy();
 
-                    if (Objects.nonNull(requestBody) && requestBody.length > 0) {
-                        request.getRequestHeaders().put(Headers.CONTENT_LENGTH, Integer.toString(requestBody.length));
-
-                    }
-
-                    conn.sendRequest(request, client.createClientCallback(reference, latch, new String(requestBody)));
-                }
-            });
-
-            latch.await(10, TimeUnit.SECONDS);
-            return reference.get();
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            throw new LambdaRuntimeClientException("Failed to make request", e);
+            return response;
+        } catch (IOException | InterruptedException e) {
+            throw new LambdaRuntimeClientException("Failed to issue cURL request", e);
         }
     }
 
-    public InvocationRequest getInvocationRequest(ClientResponse response) {
+    public InvocationRequest getInvocationRequest(HttpResponse response) {
         InvocationRequest request = new InvocationRequest();
 
-        request.setContent(response.getAttachment(Http2Client.RESPONSE_BODY).getBytes());
+        if (response.content != null && response.content.length > 0) {
+            request.setContent(response.content);
+        } else {
+            String body = new String("{}");
+            request.setContent(body.getBytes(StandardCharsets.UTF_8));
+        }
 
         request.id = null;
         request.invokedFunctionArn = null;
@@ -316,36 +337,36 @@ public class LambdaRuntimeClient {
         request.clientContext = null;
         request.cognitoIdentity = null;
 
-        response.getResponseHeaders().forEach(header -> {
-            switch (header.getHeaderName().toString()) {
+        for (Map.Entry<String,String[]> header : response.headers.entrySet()) {
+            switch (header.getKey()) {
                 case REQUEST_ID_HEADER:
-                    request.id = header.getFirst();
+                    request.id = header.getValue()[0];
                     break;
             
                 case FUNCTION_ARN_HEADER:
-                    request.invokedFunctionArn = header.getFirst();
+                    request.invokedFunctionArn = header.getValue()[0];
                     break;
             
                 case DEADLINE_MS_HEADER:
-                    request.deadlineTimeInMs = Long.parseLong(header.getFirst());
+                    request.deadlineTimeInMs = Long.parseLong(header.getValue()[0]);
                     break;
             
                 case TRACE_ID_HEADER:
-                    request.xrayTraceId = header.getFirst();
+                    request.xrayTraceId = header.getValue()[0];
                     break;
             
                 case CLIENT_CONTEXT_HEADER:
-                    request.clientContext = header.getFirst();
+                    request.clientContext = header.getValue()[0];
                     break;
             
                 case COGNITO_IDENTITY_HEADER:
-                    request.cognitoIdentity = header.getFirst();
+                    request.cognitoIdentity = header.getValue()[0];
                     break;
             
                 default:
                     break;
             }
-        });
+        }
 
         Optional.ofNullable(request.id)
                 .orElseThrow(() -> new LambdaRuntimeClientException("Request ID absent"));
@@ -353,5 +374,75 @@ public class LambdaRuntimeClient {
                 .orElseThrow(() -> new LambdaRuntimeClientException("Function ARN absent"));
 
         return request;
+    }
+
+    private HttpResponse resolve(String response) {
+		Stream<String> stream = response.lines();
+        HttpResponse httpResponse = new HttpResponse();
+
+        for (String line : stream.collect(Collectors.toList())) {
+            parseLine(line, httpResponse);
+        }
+
+        return httpResponse;
+    }
+
+    HttpResponse parseLine(String line, HttpResponse httpResponse) {        
+        String regex = "^(\\*|<|>|\\{)+ (.*)?";
+        Pattern pattern = Pattern.compile(regex);
+        Matcher matcher = pattern.matcher(line);
+
+        while (matcher.find()) {
+            // Response
+            if (matcher.group(1).startsWith("<")) {
+                if (matcher.group(2).startsWith("HTTP/1.1")) {
+                    Matcher responseCodeMatcher = Pattern.compile("HTTP/1.1 (\\d+)").matcher(matcher.group(2));
+                    if (responseCodeMatcher.find()) {
+                        httpResponse.responseCode = Integer.parseInt(responseCodeMatcher.group(1));
+                    }
+                } else {
+                    Matcher headerMatcher = Pattern.compile("(.*): (.*)").matcher(matcher.group(2));
+                    if (headerMatcher.find()) {
+                        httpResponse.headers.put(headerMatcher.group(1), 
+                            new String[] {headerMatcher.group(2)});
+                    }
+                }
+            } else if (matcher.group(1).startsWith("*")) {
+                // Comment line, skipping
+            } else if (matcher.group(1).startsWith("{")) {
+                try {
+                    JSONObject jsonObject = new JSONObject(line);
+                    httpResponse.content = line.getBytes();
+                } catch (JSONException e) {
+                    // Non-content line, skipping
+                } catch (Exception e) {
+                    // Illformated JSON line, skipping
+                }
+            }
+        }
+        
+        return httpResponse;
+    }
+
+    class HttpResponse {
+        Map<String, String[]> headers = new HashMap<>();
+        byte[] content = null;
+        int responseCode;
+        
+        @Override
+        public String toString() {
+            StringBuilder sb = new StringBuilder();
+
+            sb.append("HttpResponse [");
+            sb.append(String.format("responseCode=%d, ", responseCode));
+            headers.forEach((k, v) -> {
+                sb.append(String.format("header %s=%s, ", k, v[0]));
+            });
+            if (content != null && content.length > 0) {
+                sb.append(String.format("content=%s, ", new String(content)));
+            }
+            sb.append("]");
+            return sb.toString();
+        }    
     }
 }

@@ -16,7 +16,6 @@ import java.util.Map;
 import java.util.Objects;
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_OK;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 public class LambdaRuntimeApiClientImpl implements LambdaRuntimeApiClient {
 
@@ -54,7 +53,8 @@ public class LambdaRuntimeApiClientImpl implements LambdaRuntimeApiClient {
 
     @Override
     public void reportInvocationSuccess(String requestId, byte[] response) {
-        NativeClient.postInvocationResponse(requestId.getBytes(UTF_8), response);
+        System.out.println(String.format("reportInvocationSuccess requestId: %s", requestId));
+        NativeClient.postInvocationResponse(requestId, response);
     }
 
     @Override

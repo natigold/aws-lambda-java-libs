@@ -11,6 +11,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.Executors;
 
 /**
  * This module defines the native Runtime Interface Client which is responsible for HTTP
@@ -31,18 +32,27 @@ class NativeClient {
     private static String hostnamePort;
     private static HttpRequest nextRequest;
 
-    private static final String USER_AGENT = String.format(
+    private static final String USER_AGENT;
+    private static final HttpClient HTTP_CLIENT;
+
+    static {
+        USER_AGENT = String.format(
             "aws-lambda-java/%s",
             System.getProperty("java.vendor.version"));
-    private static final HttpClient HTTP_CLIENT = 
-        HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).followRedirects(HttpClient.Redirect.NEVER).connectTimeout(Duration.ofDays(1)).build();
+        HTTP_CLIENT = 
+            HttpClient.newBuilder().
+                       version(HttpClient.Version.HTTP_1_1).
+                       followRedirects(HttpClient.Redirect.NEVER).
+                       connectTimeout(Duration.ofSeconds(5)).
+                       executor(Executors.newFixedThreadPool(10)).
+                       build();
+    }
 
     static void init(String awsLambdaRuntimeApi) {
         Objects.requireNonNull(awsLambdaRuntimeApi, "hostnamePort cannot be null");
         hostnamePort = awsLambdaRuntimeApi;
         nextRequest = 
             HttpRequest.newBuilder(URI.create(String.format(NEXT_URL_TEMPLATE, hostnamePort))).header("User-Agent", USER_AGENT).GET().build();
-
     }
     
     static InvocationRequest next() {
@@ -56,7 +66,7 @@ class NativeClient {
         return invocationRequestFromHttpResponse(response);
     }
 
-    static void postInvocationResponse(byte[] requestId, byte[] response) {
+    static void postInvocationResponse(String requestId, byte[] response) {
         URI endpoint = URI.create(String.format(INVOCATION_SUCCESS_URL_TEMPLATE, hostnamePort, requestId));
         HttpRequest invocationResponseRequest = 
             HttpRequest.newBuilder(endpoint).header("User-Agent", USER_AGENT).POST(HttpRequest.BodyPublishers.ofByteArray(response)).build();

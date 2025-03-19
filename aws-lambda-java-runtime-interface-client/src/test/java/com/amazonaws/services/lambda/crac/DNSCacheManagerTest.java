@@ -5,14 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 package com.amazonaws.services.lambda.crac;
 
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 
-import com.amazonaws.services.lambda.runtime.api.client.runtimeapi.JniHelper;
- 
 import java.util.Map;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -32,11 +29,6 @@ public class DNSCacheManagerTest {
         java.security.Security.setProperty("networkaddress.cache.negative.ttl" , "10000");
     }
  
-    @BeforeAll
-    public static void jniLoad() {
-        JniHelper.load();
-    }
-
     @BeforeEach
     public void setup() {
         Core.resetGlobalContext();

@@ -38,7 +38,7 @@ public class LambdaRuntimeApiClientImpl implements LambdaRuntimeApiClient {
         Objects.requireNonNull(hostnameAndPort, "hostnameAndPort cannot be null");
         this.baseUrl = "http://" + hostnameAndPort;
         this.invocationEndpoint = this.baseUrl + "/2018-06-01/runtime/invocation/";
-        NativeClient.init(hostnameAndPort);
+        CrtClient.init(hostnameAndPort);
     }
 
     @Override
@@ -49,12 +49,12 @@ public class LambdaRuntimeApiClientImpl implements LambdaRuntimeApiClient {
 
     @Override
     public InvocationRequest nextInvocation() {
-        return NativeClient.next();
+        return CrtClient.next();
     }
 
     @Override
     public void reportInvocationSuccess(String requestId, byte[] response) {
-        NativeClient.postInvocationResponse(requestId.getBytes(UTF_8), response);
+        CrtClient.postInvocationResponse(requestId.getBytes(UTF_8), response);
     }
 
     @Override

@@ -92,7 +92,7 @@ class CrtClient {
     
     static InvocationRequest next() {
         HttpClientConnection connection = acquireConnection();
-        ByteBuffer responseBody = ByteBuffer.allocateDirect(1024); 
+        ByteBuffer responseBody = ByteBuffer.allocateDirect(1024 * 1024 * 16); 
 
         try {
             HttpHeader[] headers = {

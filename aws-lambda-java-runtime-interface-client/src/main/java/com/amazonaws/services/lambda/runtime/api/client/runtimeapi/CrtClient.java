@@ -89,10 +89,9 @@ class CrtClient {
         return cachedConnection;
     }
     
-    
     static InvocationRequest next() {
         HttpClientConnection connection = acquireConnection();
-        ByteBuffer responseBody = ByteBuffer.allocateDirect(1024 * 1024 * 16); 
+        BufferHolder responseContentHolder = new BufferHolder(1024);
 
         try {
             HttpHeader[] headers = {
@@ -121,18 +120,9 @@ class CrtClient {
 
                 @Override
                 public int onResponseBody(HttpStream stream, byte[] bodyBytesIn) {
-                    /* 
-                    bytes = reinterpret_cast<const jbyte*>(response.payload.c_str());
-                    CHECK_EXCEPTION(env, jArray = env->NewByteArray(response.payload.length()));
-                    CHECK_EXCEPTION(env, env->SetByteArrayRegion(jArray, 0, response.payload.length(), bytes));
-                    CHECK_EXCEPTION(env, env->SetObjectField(invocationRequest, contentField, jArray));
-                    */
-                    if (responseBody.remaining() < bodyBytesIn.length) {
-                        // Buffer is full, signal to pause reading
-                        return 0;
-                    }
-                    responseBody.put(bodyBytesIn);
-                    return responseBody.remaining();
+                    responseContentHolder.ensureCapacity(bodyBytesIn.length);
+                    responseContentHolder.buffer.put(bodyBytesIn);
+                    return responseContentHolder.buffer.remaining();
                 }
 
                 @Override
@@ -153,14 +143,9 @@ class CrtClient {
             invocationRequest.setInvokedFunctionArn(responseHeaders.get(FUNCTION_ARN_HEADER));
             invocationRequest.setClientContext(responseHeaders.get(CLIENT_CONTEXT_HEADER));
             invocationRequest.setCognitoIdentity(responseHeaders.get(COGNITO_IDENTITY_HEADER));
-            invocationRequest.setInvokedFunctionArn(responseHeaders.get(FUNCTION_ARN_HEADER));
             invocationRequest.setXrayTraceId(responseHeaders.get(TRACE_ID_HEADER));
-            
-            responseBody.flip();
-            byte[] content = new byte[responseBody.remaining()];
-            responseBody.get(content);
-            invocationRequest.setContent(content);
-            responseBody.clear();
+            invocationRequest.setContent(responseContentHolder.getContent());
+            responseContentHolder.buffer.clear();
 
             if (Objects.nonNull(responseHeaders.get(DEADLINE_MS_HEADER))) {
                 try {
@@ -174,7 +159,6 @@ class CrtClient {
 
             return invocationRequest;
         } finally {
-            // connection.close();
             boolean bool = false;
         }
     }
@@ -243,4 +227,31 @@ class CrtClient {
             connection.close();
         }
     }
+
+    static class BufferHolder {
+        ByteBuffer buffer;
+        
+        BufferHolder(int initialSize) {
+            buffer = ByteBuffer.allocateDirect(initialSize);
+        }
+        
+        void ensureCapacity(int required) {
+            if (buffer.remaining() < required) {
+                int newCapacity = Math.max(
+                    buffer.capacity() * 2, 
+                    required
+                );
+
+                ByteBuffer newBuffer = ByteBuffer.allocateDirect(newCapacity);
+                buffer = newBuffer;
+            }
+        }
+
+        public byte[] getContent() {
+            buffer.flip();
+            byte[] content = new byte[buffer.remaining()];
+            buffer.get(content);
+            return content;
+        }    
+    }   
 }
